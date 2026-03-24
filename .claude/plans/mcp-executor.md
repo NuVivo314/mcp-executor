@@ -9,7 +9,7 @@ Serveur MCP HTTP en Go exposant 3 tools (`list_api`, `search`, `execute`) permet
 | Role | Library | Import |
 |------|---------|--------|
 | MCP server | mark3labs/mcp-go | `github.com/mark3labs/mcp-go` |
-| QuickJS (WASM, CGO-free) | fastschema/qjs | `github.com/fastschema/qjs` |
+| QuickJS | modernc.org/quickjs | `modernc.org/quickjs` |
 | OpenAPI parsing | getkin/kin-openapi | `github.com/getkin/kin-openapi/openapi3` |
 | Fuzzy search | sahilm/fuzzy | `github.com/sahilm/fuzzy` |
 | YAML | gopkg.in/yaml.v3 | `gopkg.in/yaml.v3` |
@@ -91,7 +91,7 @@ sandbox:
 
 ## JS Sandbox Design
 
-**Isolation**: Runtime QuickJS frais par requete, tourne dans WASM via Wazero. Zero acces au filesystem/network du host. Credentials injectees cote Go, jamais exposees au JS.
+**Isolation**: Runtime QuickJS frais par requete via `modernc.org/quickjs`. Zero acces au filesystem/network du host. Credentials injectees cote Go, jamais exposees au JS.
 
 ### Fonctions injectees dans `search`:
 - `search(query)` -> fuzzy match sur les endpoints, retourne `[{path, method, operationId, summary, score}]`
