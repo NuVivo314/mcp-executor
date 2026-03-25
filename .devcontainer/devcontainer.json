@@ -3,6 +3,13 @@
   "build": {
     "dockerfile": "Dockerfile"
   },
+  "mounts": [
+    "source=${localEnv:HOME}/.go/cache/mod,target=/go/pkg/mod,type=bind,consistency=cached",
+    "source=${localEnv:HOME}/.go/cache/build,target=/root/.cache/go-build,type=bind,consistency=cached",
+    "source=${localEnv:HOME}/.claude,target=/root/.claude,type=bind,consistency=cached"
+    "source=${localEnv:HOME}/.claude.json,target=/root/.claude.json,type=bind,consistency=cached"
+  ],
+  "initializeCommand": "mkdir -p ${localEnv:HOME}/.go/cache/mod ${localEnv:HOME}/.go/cache/build ${localEnv:HOME}/.claude",
   "postCreateCommand": "go mod download",
   "forwardPorts": [8080],
   "customizations": {

@@ -1,0 +1,16 @@
+server:
+  address: ":8080"
+  transport: "streamable-http"  # or "sse"
+
+apis:
+  - name: "petstore"
+    description: "Petstore sample API"
+    spec_path: "./specs/petstore.yaml"
+    base_url: "https://petstore3.swagger.io"
+    auth:
+      type: "none"
+
+sandbox:
+  execution_timeout: 60s
+  max_response_body_bytes: 1048576  # 1 MiB
+  allowed_hosts: []                 # empty = only base_url of each API
