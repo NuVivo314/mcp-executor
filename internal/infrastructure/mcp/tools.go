@@ -2,115 +2,88 @@ package mcp
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
+	"log/slog"
 
 	"github.com/mark3labs/mcp-go/mcp"
+	mcpserver "github.com/mark3labs/mcp-go/server"
 	"github.com/nuvivo314/mcp-executor/internal/domain/model"
 )
 
-// listAPIUseCase is the interface expected by ToolHandlers for list_api.
+// listAPIUseCase is the interface expected by Handlers for list_api.
 type listAPIUseCase interface {
 	Execute() []model.APISpec
 }
 
-// searchUseCase is the interface expected by ToolHandlers for search.
+// searchUseCase is the interface expected by Handlers for search.
 type searchUseCase interface {
 	Execute(ctx context.Context, apiName, code string) (string, error)
 }
 
-// executeUseCase is the interface expected by ToolHandlers for execute.
+// executeUseCase is the interface expected by Handlers for execute.
 type executeUseCase interface {
 	Execute(ctx context.Context, apiName, code string) (string, error)
 }
 
-// ToolHandlers holds the use cases and exposes MCP tool handler functions.
-type ToolHandlers struct {
+// Handlers holds the use cases and exposes MCP tool and resource handler functions.
+type Handlers struct {
 	list    listAPIUseCase
 	search  searchUseCase
 	execute executeUseCase
 }
 
-// NewToolHandlers creates a ToolHandlers with the given use cases.
-func NewToolHandlers(list listAPIUseCase, search searchUseCase, execute executeUseCase) *ToolHandlers {
-	return &ToolHandlers{list: list, search: search, execute: execute}
+// NewHandlers creates a Handlers with the given use cases.
+func NewHandlers(list listAPIUseCase, search searchUseCase, execute executeUseCase) *Handlers {
+	return &Handlers{list: list, search: search, execute: execute}
 }
 
-// HandleListAPI handles the list_api MCP tool call.
-func (h *ToolHandlers) HandleListAPI(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	apis := h.list.Execute()
-	b, err := json.MarshalIndent(apis, "", "  ")
+// handleSandbox extracts api_name + exec_code from the request and delegates to uc.
+func handleSandbox(ctx context.Context, req mcp.CallToolRequest, name string, uc searchUseCase) (*mcp.CallToolResult, error) {
+	apiName, err := req.RequireString("api_name")
 	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("serialising APIs: %v", err)), nil
+		return mcp.NewToolResultError("api_name is required"), nil
 	}
-	return mcp.NewToolResultText(string(b)), nil
+	code, err := req.RequireString("exec_code")
+	if err != nil {
+		return mcp.NewToolResultError("exec_code is required"), nil
+	}
+	slog.Debug("tool called", "tool", name, "api", apiName, "code_len", len(code))
+
+	result, err := uc.Execute(ctx, apiName, code)
+	if err != nil {
+		slog.Debug(name+" error", "api", apiName, "err", err)
+		return mcp.NewToolResultError(fmt.Sprintf("%s error: %v", name, err)), nil
+	}
+	slog.Debug(name+" result", "api", apiName, "result_len", len(result))
+	return mcp.NewToolResultText(result), nil
 }
 
 // HandleSearch handles the search MCP tool call.
-func (h *ToolHandlers) HandleSearch(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	apiName, err := req.RequireString("api_name")
-	if err != nil {
-		return mcp.NewToolResultError("api_name is required"), nil
-	}
-	code, err := req.RequireString("exec_code")
-	if err != nil {
-		return mcp.NewToolResultError("exec_code is required"), nil
-	}
-
-	result, err := h.search.Execute(ctx, apiName, code)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("search error: %v", err)), nil
-	}
-	return mcp.NewToolResultText(result), nil
+func (h *Handlers) HandleSearch(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	return handleSandbox(ctx, req, "search", h.search)
 }
 
 // HandleExecute handles the execute MCP tool call.
-func (h *ToolHandlers) HandleExecute(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	apiName, err := req.RequireString("api_name")
-	if err != nil {
-		return mcp.NewToolResultError("api_name is required"), nil
-	}
-	code, err := req.RequireString("exec_code")
-	if err != nil {
-		return mcp.NewToolResultError("exec_code is required"), nil
-	}
-
-	result, err := h.execute.Execute(ctx, apiName, code)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("execute error: %v", err)), nil
-	}
-	return mcp.NewToolResultText(result), nil
+func (h *Handlers) HandleExecute(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	return handleSandbox(ctx, req, "execute", h.execute)
 }
 
-// BuildTools returns the MCP tool definitions for list_api, search, execute.
-func BuildTools() []mcp.Tool {
-	listAPI := mcp.NewTool("list_api",
-		mcp.WithDescription("List all configured APIs available for search and execution"),
+// registerTools adds all tool definitions and their handlers to s.
+func registerTools(s *mcpserver.MCPServer, h *Handlers) {
+	s.AddTool(
+		mcp.NewTool("search",
+			mcp.WithDescription("Run JavaScript with search helpers (search, getEndpoints, getSpec) to explore an API"),
+			mcp.WithString("api_name", mcp.Required(), mcp.Description("Name of the API to search")),
+			mcp.WithString("exec_code", mcp.Required(), mcp.Description("JavaScript code to execute in the search context")),
+		),
+		h.HandleSearch,
 	)
-
-	search := mcp.NewTool("search",
-		mcp.WithDescription("Run JavaScript with search helpers (search, getEndpoints, getSpec) to explore an API"),
-		mcp.WithString("api_name",
-			mcp.Required(),
-			mcp.Description("Name of the API to search"),
+	s.AddTool(
+		mcp.NewTool("execute",
+			mcp.WithDescription("Run JavaScript with HTTP helpers (httpGet, httpPost, …) to call an API. Timeout: 60s"),
+			mcp.WithString("api_name", mcp.Required(), mcp.Description("Name of the API to call")),
+			mcp.WithString("exec_code", mcp.Required(), mcp.Description("JavaScript code to execute with HTTP helpers available")),
 		),
-		mcp.WithString("exec_code",
-			mcp.Required(),
-			mcp.Description("JavaScript code to execute in the search context"),
-		),
+		h.HandleExecute,
 	)
-
-	execute := mcp.NewTool("execute",
-		mcp.WithDescription("Run JavaScript with HTTP helpers (httpGet, httpPost, …) to call an API. Timeout: 60s"),
-		mcp.WithString("api_name",
-			mcp.Required(),
-			mcp.Description("Name of the API to call"),
-		),
-		mcp.WithString("exec_code",
-			mcp.Required(),
-			mcp.Description("JavaScript code to execute with HTTP helpers available"),
-		),
-	)
-
-	return []mcp.Tool{listAPI, search, execute}
 }

@@ -44,7 +44,7 @@ func buildTestClient(t *testing.T) *mcpclient.Client {
 	searchUC := application.NewSearchUseCase(sb)
 	executeUC := application.NewExecuteUseCase(sb, 60*time.Second)
 
-	handlers := mcpinfra.NewToolHandlers(listUC, searchUC, executeUC)
+	handlers := mcpinfra.NewHandlers(listUC, searchUC, executeUC)
 	mcpSrv := mcpinfra.NewMCPServer(handlers)
 
 	c, err := mcpclient.NewInProcessClient(mcpSrv)
@@ -65,22 +65,25 @@ func buildTestClient(t *testing.T) *mcpclient.Client {
 	return c
 }
 
-// --- list_api ---
+// --- list_api resource ---
 
-func TestIntegration_ListAPI_ReturnsAPI(t *testing.T) {
+func TestIntegration_ListAPIResource_ReturnsAPI(t *testing.T) {
 	c := buildTestClient(t)
-	result, err := c.CallTool(context.Background(), mcp.CallToolRequest{
-		Params: mcp.CallToolParams{Name: "list_api"},
+	result, err := c.ReadResource(context.Background(), mcp.ReadResourceRequest{
+		Params: mcp.ReadResourceParams{URI: "api://list"},
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if result.IsError {
-		t.Fatalf("tool returned error: %v", mcp.GetTextFromContent(result.Content[0]))
+	if len(result.Contents) == 0 {
+		t.Fatal("expected resource contents")
 	}
-	text := mcp.GetTextFromContent(result.Content[0])
-	if !strings.Contains(text, "petstore") {
-		t.Errorf("response should contain 'petstore', got: %q", text)
+	tc, ok := mcp.AsTextResourceContents(result.Contents[0])
+	if !ok {
+		t.Fatal("expected TextResourceContents")
+	}
+	if !strings.Contains(tc.Text, "petstore") {
+		t.Errorf("response should contain 'petstore', got: %q", tc.Text)
 	}
 }
 
@@ -237,5 +240,86 @@ func TestIntegration_Prompt_SearchAPI(t *testing.T) {
 	}
 	if !strings.Contains(text, "list all pets") {
 		t.Errorf("prompt should reference the query, got: %q", text)
+	}
+}
+
+func TestIntegration_Prompt_ExploreAPI(t *testing.T) {
+	c := buildTestClient(t)
+	result, err := c.GetPrompt(context.Background(), mcp.GetPromptRequest{
+		Params: mcp.GetPromptParams{
+			Name:      "explore_api",
+			Arguments: map[string]string{"api_name": "petstore"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	text := mcp.GetTextFromContent(result.Messages[0].Content)
+	if !strings.Contains(text, "getEndpoints()") {
+		t.Errorf("prompt should call getEndpoints(), got: %q", text)
+	}
+}
+
+func TestIntegration_Prompt_ExecuteGet(t *testing.T) {
+	c := buildTestClient(t)
+	result, err := c.GetPrompt(context.Background(), mcp.GetPromptRequest{
+		Params: mcp.GetPromptParams{
+			Name: "execute_get",
+			Arguments: map[string]string{
+				"api_name": "petstore",
+				"path":     "/pets/1",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	text := mcp.GetTextFromContent(result.Messages[0].Content)
+	if !strings.Contains(text, "httpGet(") {
+		t.Errorf("prompt should call httpGet(), got: %q", text)
+	}
+	if !strings.Contains(text, "/pets/1") {
+		t.Errorf("prompt should reference path, got: %q", text)
+	}
+}
+
+func TestIntegration_Prompt_ExecutePost(t *testing.T) {
+	c := buildTestClient(t)
+	result, err := c.GetPrompt(context.Background(), mcp.GetPromptRequest{
+		Params: mcp.GetPromptParams{
+			Name: "execute_post",
+			Arguments: map[string]string{
+				"api_name": "petstore",
+				"path":     "/pets",
+				"body":     `{"name":"Rex"}`,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	text := mcp.GetTextFromContent(result.Messages[0].Content)
+	if !strings.Contains(text, "httpPost(") {
+		t.Errorf("prompt should call httpPost(), got: %q", text)
+	}
+	if !strings.Contains(text, "Rex") {
+		t.Errorf("prompt should include body, got: %q", text)
+	}
+}
+
+func TestIntegration_ListPrompts(t *testing.T) {
+	c := buildTestClient(t)
+	result, err := c.ListPrompts(context.Background(), mcp.ListPromptsRequest{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	names := make(map[string]bool)
+	for _, p := range result.Prompts {
+		names[p.Name] = true
+	}
+	for _, expected := range []string{"search_api", "explore_api", "execute_get", "execute_post"} {
+		if !names[expected] {
+			t.Errorf("prompt %q not listed", expected)
+		}
 	}
 }

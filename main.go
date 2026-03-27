@@ -1,7 +1,9 @@
 package main
 
 import (
+	"flag"
 	"log"
+	"log/slog"
 	"os"
 
 	"github.com/nuvivo314/mcp-executor/internal/application"
@@ -14,21 +16,30 @@ import (
 )
 
 func main() {
-	cfgPath := "config.yaml"
-	if len(os.Args) > 1 {
-		cfgPath = os.Args[1]
-	}
+	cfgPath := flag.String("config", "config.yaml", "path to config file")
+	verbose := flag.Bool("verbose", false, "enable debug logging")
+	flag.Parse()
 
-	cfg, err := config.Load(cfgPath)
+	level := slog.LevelInfo
+	if *verbose {
+		level = slog.LevelDebug
+	}
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})))
+
+	slog.Debug("starting mcp-executor", "config", *cfgPath, "verbose", *verbose)
+
+	cfg, err := config.Load(*cfgPath)
 	if err != nil {
 		log.Fatalf("loading config: %v", err)
 	}
+	slog.Debug("config loaded", "apis", len(cfg.APIs), "transport", cfg.Server.Transport, "address", cfg.Server.Address)
 
 	// Infrastructure: adapters
 	registry, err := openapi.NewRegistry(cfg.APIs)
 	if err != nil {
 		log.Fatalf("initialising API registry: %v", err)
 	}
+	slog.Debug("API registry initialised", "count", len(cfg.APIs))
 
 	searchEngine := search.NewFuzzySearch(registry)
 
@@ -38,6 +49,7 @@ func main() {
 			allowedHosts = append(allowedHosts, hostOf(api.BaseURL))
 		}
 	}
+	slog.Debug("sandbox allowed hosts", "hosts", allowedHosts)
 	httpClient := httpclient.NewHTTPClient(allowedHosts, cfg.Sandbox.MaxResponseBodyBytes)
 
 	sb := sandbox.NewSandbox(registry, searchEngine, httpClient)
@@ -48,7 +60,7 @@ func main() {
 	executeUC := application.NewExecuteUseCase(sb, cfg.Sandbox.ExecutionTimeout)
 
 	// Infrastructure: MCP wiring
-	handlers := mcpinfra.NewToolHandlers(listUC, searchUC, executeUC)
+	handlers := mcpinfra.NewHandlers(listUC, searchUC, executeUC)
 	mcpSrv := mcpinfra.NewMCPServer(handlers)
 
 	transport, err := mcpinfra.NewStreamableServer(mcpSrv, cfg.Server)
@@ -56,7 +68,7 @@ func main() {
 		log.Fatalf("creating transport: %v", err)
 	}
 
-	log.Printf("mcp-executor listening on %s (transport: %s)", cfg.Server.Address, cfg.Server.Transport)
+	slog.Info("mcp-executor listening", "address", cfg.Server.Address, "transport", cfg.Server.Transport)
 	if err := transport.Start(cfg.Server.Address); err != nil {
 		log.Fatalf("server error: %v", err)
 	}

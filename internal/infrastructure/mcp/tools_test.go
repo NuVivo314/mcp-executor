@@ -46,41 +46,48 @@ func makeRequest(args map[string]any) mcp.CallToolRequest {
 	return req
 }
 
-// --- list_api ---
+func extractText(r *mcp.CallToolResult) string {
+	if r == nil || len(r.Content) == 0 {
+		return ""
+	}
+	return mcp.GetTextFromContent(r.Content[0])
+}
 
-func TestHandleListAPI_Empty(t *testing.T) {
-	h := NewToolHandlers(&stubListApi{}, &stubSearch{}, &stubExecute{})
-	result, err := h.HandleListAPI(context.Background(), mcp.CallToolRequest{})
+// --- list_api resource ---
+
+func TestHandleListAPIResource_Empty(t *testing.T) {
+	h := NewHandlers(&stubListApi{}, &stubSearch{}, &stubExecute{})
+	contents, err := h.HandleListAPIResource(context.Background(), mcp.ReadResourceRequest{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if result == nil {
-		t.Fatal("result should not be nil")
-	}
-	if result.IsError {
-		t.Errorf("unexpected error result: %v", result)
+	if len(contents) == 0 {
+		t.Fatal("expected at least one resource content")
 	}
 }
 
-func TestHandleListAPI_ReturnsList(t *testing.T) {
+func TestHandleListAPIResource_ReturnsList(t *testing.T) {
 	apis := []model.APISpec{
 		{Name: "petstore", Description: "Pet API", BaseURL: "https://petstore.example.com"},
 	}
-	h := NewToolHandlers(&stubListApi{apis: apis}, &stubSearch{}, &stubExecute{})
-	result, err := h.HandleListAPI(context.Background(), mcp.CallToolRequest{})
+	h := NewHandlers(&stubListApi{apis: apis}, &stubSearch{}, &stubExecute{})
+	contents, err := h.HandleListAPIResource(context.Background(), mcp.ReadResourceRequest{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	text := extractText(result)
-	if !strings.Contains(text, "petstore") {
-		t.Errorf("response should contain 'petstore', got: %q", text)
+	tc, ok := mcp.AsTextResourceContents(contents[0])
+	if !ok {
+		t.Fatal("expected TextResourceContents")
+	}
+	if !strings.Contains(tc.Text, "petstore") {
+		t.Errorf("response should contain 'petstore', got: %q", tc.Text)
 	}
 }
 
 // --- search ---
 
 func TestHandleSearch_Success(t *testing.T) {
-	h := NewToolHandlers(&stubListApi{}, &stubSearch{result: `[{"operationId":"listPets"}]`}, &stubExecute{})
+	h := NewHandlers(&stubListApi{}, &stubSearch{result: `[{"operationId":"listPets"}]`}, &stubExecute{})
 	req := makeRequest(map[string]any{"api_name": "petstore", "exec_code": `search("pets")`})
 	result, err := h.HandleSearch(context.Background(), req)
 	if err != nil {
@@ -95,7 +102,7 @@ func TestHandleSearch_Success(t *testing.T) {
 }
 
 func TestHandleSearch_MissingAPIName(t *testing.T) {
-	h := NewToolHandlers(&stubListApi{}, &stubSearch{result: "ok"}, &stubExecute{})
+	h := NewHandlers(&stubListApi{}, &stubSearch{result: "ok"}, &stubExecute{})
 	req := makeRequest(map[string]any{"exec_code": `search("pets")`})
 	result, err := h.HandleSearch(context.Background(), req)
 	if err != nil {
@@ -107,7 +114,7 @@ func TestHandleSearch_MissingAPIName(t *testing.T) {
 }
 
 func TestHandleSearch_MissingCode(t *testing.T) {
-	h := NewToolHandlers(&stubListApi{}, &stubSearch{result: "ok"}, &stubExecute{})
+	h := NewHandlers(&stubListApi{}, &stubSearch{result: "ok"}, &stubExecute{})
 	req := makeRequest(map[string]any{"api_name": "petstore"})
 	result, err := h.HandleSearch(context.Background(), req)
 	if err != nil {
@@ -119,7 +126,7 @@ func TestHandleSearch_MissingCode(t *testing.T) {
 }
 
 func TestHandleSearch_SandboxError(t *testing.T) {
-	h := NewToolHandlers(&stubListApi{}, &stubSearch{err: errors.New("js error")}, &stubExecute{})
+	h := NewHandlers(&stubListApi{}, &stubSearch{err: errors.New("js error")}, &stubExecute{})
 	req := makeRequest(map[string]any{"api_name": "petstore", "exec_code": `{{{`})
 	result, err := h.HandleSearch(context.Background(), req)
 	if err != nil {
@@ -133,7 +140,7 @@ func TestHandleSearch_SandboxError(t *testing.T) {
 // --- execute ---
 
 func TestHandleExecute_Success(t *testing.T) {
-	h := NewToolHandlers(&stubListApi{}, &stubSearch{}, &stubExecute{result: `{"id":1}`})
+	h := NewHandlers(&stubListApi{}, &stubSearch{}, &stubExecute{result: `{"id":1}`})
 	req := makeRequest(map[string]any{"api_name": "petstore", "exec_code": `httpGet("/pets/1")`})
 	result, err := h.HandleExecute(context.Background(), req)
 	if err != nil {
@@ -148,7 +155,7 @@ func TestHandleExecute_Success(t *testing.T) {
 }
 
 func TestHandleExecute_MissingAPIName(t *testing.T) {
-	h := NewToolHandlers(&stubListApi{}, &stubSearch{}, &stubExecute{result: "ok"})
+	h := NewHandlers(&stubListApi{}, &stubSearch{}, &stubExecute{result: "ok"})
 	req := makeRequest(map[string]any{"exec_code": `httpGet("/")`})
 	result, err := h.HandleExecute(context.Background(), req)
 	if err != nil {
@@ -160,7 +167,7 @@ func TestHandleExecute_MissingAPIName(t *testing.T) {
 }
 
 func TestHandleExecute_SandboxError(t *testing.T) {
-	h := NewToolHandlers(&stubListApi{}, &stubSearch{}, &stubExecute{err: errors.New("timeout")})
+	h := NewHandlers(&stubListApi{}, &stubSearch{}, &stubExecute{err: errors.New("timeout")})
 	req := makeRequest(map[string]any{"api_name": "petstore", "exec_code": `while(true){}`})
 	result, err := h.HandleExecute(context.Background(), req)
 	if err != nil {
@@ -169,13 +176,4 @@ func TestHandleExecute_SandboxError(t *testing.T) {
 	if !result.IsError {
 		t.Error("expected error result for sandbox error")
 	}
-}
-
-// --- helpers ---
-
-func extractText(r *mcp.CallToolResult) string {
-	if r == nil || len(r.Content) == 0 {
-		return ""
-	}
-	return mcp.GetTextFromContent(r.Content[0])
 }
